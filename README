@@ -1,0 +1,100 @@
+									CSE-506 OPERATING SYSTEMS ASSIGNMENT 3
+									ASYNCHRONOUS and CONCURRENT PROCESSING
+											MOHIT GOYAL(110349552)
+											ARJUN BORA(110310134)
+											   DECEMBER 3, 2015
+
+
+INTRODUCTION:
+	This assignment is about an asynchronous and concurrent processing of the producer consumer problem. It involves kernel locking and callbacks. This project has been developed as a system call in the form of loadable/unloadable kernel module. The system call deals with performing costly file operations concurrently and send results back to the user in an asynchronous way. This project is about processing jobs asynchronously and proper handling of shared data between jobs.
+
+USAGE:
+	This project is developed as loadable kernel module. The user is required to insert the sys_submitjob.ko module in the kernel using below command to start the module:
+		# insmod sys_submitjob.ko
+		
+	User program “main” takes the input from the user from the shell. It performs exhaustive validation check regarding the syntax of the input arguments and return an appropriate error if the arguments specified by user are not valid. The required format of the inputs to “main” program is:
+	
+		# ./main [operation] infile(s) outfile [key] [options]
+		
+	Following are the operations supported in this project on the given files:
+	
+		a.	Encryption [-e]: This option is used to perform encryption on given file with key using crypto APIs. If key is not 	given with this option, it will return error.
+	
+		b.	Decryption [-d]: This option is used to perform decryption on given file with key. Key should be same which was used to encrypt file, otherwise it will return error message through netlink as the decryption is not valid.
+	
+		c.	Compression [-c]: This option is used to perform compression operation on given file.
+	
+		d.	Extraction [-x]: To perform extraction operation on given file, this option can be used. Only compressed file can be extracted. If uncompressed file is given to extract, it will return error.
+	
+		e.	Checksum [-s]: To find the checksum of the file, this option can be used. It will calculate the checksum and return it to user on netlink callback.
+	
+		f.	Concatenation [-a]: This option is used to perform concatenation of files into output file. If number of input files are less than 2 it will return error.
+
+		g.	List [-l]: To list all the jobs in the queue, this option can be used. It will return all the jobs pending to be executed in the queue. It will return the jobs with ID, Operation, Priority and status of job whether it is “work queue” or “wait queue”. The system call does not use netlink to send back this list of all the queued jobs. It writes this information in one of the field of the job struct, which user program reads.
+
+		h.	Change Priority [-C]: This option is used to change priority of any submitted, yet to be executed by the consumers. User need to provide the ID of the job whose priority needs to be changed.
+
+		i.	Remove Job [-r]: This option is used to remove job which was submitted before, but yet to be executed by the consumers. User need to provide the ID of the job which needs to be removed. Before removing the job, kernel sends back a “removed job <job id>” message to the process which is waiting for some message about the completion of the requested job. This message is displayed to the user.
+
+	Following are the options supported in the system call:
+		a.	Priority [-p]: User can optionally give priority (1 to 10) while submitting jobs, “10” being the highest priority and “1” being the lowest priority. If user does not give any priory, then default priority of the job is DEFAULT PRIORITY, which will be 5. If the same priority is given for two concurrently executing jobs, then the one that was submitted earlier gets executed first in FCFS order.
+
+		b.	Type [-t]: This flag is used to take input from user about which type of algorithms to be used to file operations like encryption/decryption, compression/extraction, and computing checksum. The default algorithm for encryption/decryption is AES, for compression/extraction is DEFLATE, and for checksum it is MD5.
+
+		c.	Rename [-n]: If this option flag is set while submitting job, then it will delete the input file and rename the encrypted file with output file.
+
+		d.	Overwrite [-o]: If this option flag is set while submitting job, then it will overwrite the input file with the encrypted file. Only one file need to be given with this option. If both infile and outfile are given with this option, it will return an appropriate error in the user level.
+
+PROJECT DESIGN:
+	User Level:
+		For operations which are to be done asynchronously (all except List/RemoveJob/ RemoveAllJobs/ChangePriority) we are creating a child process which creates a netlink socket and listen for message to be sent from kernel about the status of the job sometime later.
+		
+		Kernel threads have their CWD set to root,  that is why if the user gives relative  file names are given by user, we add the CWD to the filename, is the user has provided the absolute filename, so that kernel  threads access the correct file.
+		
+		Kernel thread have their CWD set to root, that is why if the user gives relative  file names are given by user, we add the CWD to the filename, so that kernel  threads access the correct file.
+
+		
+	Kernel level:
+
+		In kernel, we are running NUMBER_OF_CONSUMERS (3) number of threads, and maintaining two queues, one is main_queue, and other is wait_queue.
+		
+		There are two kind of operations:
+			a.	 List/RemoveJob/RemoveAllJobs/ChangePriority :
+			When the system call receives request for these jobs, they are served right away. Appropriate message is sent back to the user process. In case of List operation message is written into the job->key field which the user process reads and display to the user.
+			
+			b.	Encryption/Decryption/Compression/uncompression/Checksum/AppendFiles :
+			System call first tries to put the job into the main_queue, and if it is full, it puts it into the wait_queue. A warning message is sent to user to slow down speed, if main_queue is full. Size of each queue is MAX_LEN (5). If even the wait_queue is full, user process is throttled and put to sleep until some job gets completed and some place is available in the wait_queue. A job ID is sent back to the user for every accepted job. User need this job ID for operations like list, remove, change priority.
+			
+			Consumers start on loading the module. They went to sleep state until some new job comes in the queues. We lock the queues before removing/adding a job in the queue, to avoid inconsistency. The lock used is a mutex lock. Consumers call respective functions defined in utils.h to operate the jobs.
+			
+			When the operation completes, consumer sends a netlink success/failure message to the user mode. In case of failure, user also receives the error code which is translated to the error message. Consumer then fetches a new job from the queue. If it finds no job in the queue, it goes to the sleep state again. On unloading the module, we set a flag which let all consumers skip the job fetching task and they all exit.
+
+EXTRA CREDIT:
+	This assignment has the following features added:
+
+		a.	Prioritizing jobs – Every job can be added with a priority. If no priority is given, then the default priority of the job is MEDIUM PRIORITY.
+		b.	Wait queue for jobs besides a work queue. It will warn the user when the work queue is full to slow down.
+		c.	Calculating checksum using MD5 and SHA1
+		d.	Performing Compression/Decompression using DEFLATE
+		e.	Performing Concatenation of input files into output file
+
+FILES:
+		a.	common.h
+		b.	main.c
+		c.	main.h
+		d.	sys_submitjob.c
+		e.	sys_submitjob.h
+		f.	utils.h
+		g.	Makefile
+		h.	submitjob.sh
+		i.	README
+		j.	HW3
+		k.	kernel.config
+		l.	Test scripts and files
+
+
+REFERENCES:
+	http://lxr.free-electrons.com/source/include/linux/list.h
+	http://stackoverflow.com/questions/9907160/how-to-convert-enum-names-to-string-in-c
+	http://stackoverflow.com/questions/3299386/how-to-use-netlink-socket-to-communicate-with-a-kernel-module
+
